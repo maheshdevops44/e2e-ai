@@ -11,12 +11,14 @@ on:
       - "ui/**"
       - "agent/**"
       - "test-executor/**"
+      - "ui-v2/**"
   pull_request:
     branches-ignore:
       - "release"
       - "main"
     paths:
       - "terraform/**"
+      - ".github/**"
       - "ui/**"
       - "agent/**"
       - "test-executor/**"
@@ -32,13 +34,13 @@ on:
 permissions:
   id-token: write
   contents: read
-  
+  pull-requests: write  # Added: For commenting on PRs
 
 env:
   ECR_REPOSITORY_NAME_UI: "e2e-ai-dev-ui"
   ECR_REPOSITORY_NAME_AGENT: "e2e-ai-dev-agent"
   ECR_REPOSITORY_NAME_TEST_EXECUTOR: "e2e-ai-dev-test-executor"
-  AWS_REGION: "us-east-1" 
+  AWS_REGION: "us-east-1"
   ENVIRONMENT: "dev"
   ECS_CLUSTER_NAME: "e2e-ai-dev-cluster"
   ECS_SERVICE_NAME_UI: "e2e-ai-dev-ui-service"
@@ -53,13 +55,121 @@ env:
   IAM_DEPLOYER_ROLE_NAME: "E2eAiDeployer"
 
 jobs:
-  terraform-apply:
+  # ============================================
+  # CHANGE DETECTION - Runs on every trigger
+  # ============================================
+  detect-changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      ui: ${{ steps.filter.outputs.ui }}
+      platform: ${{ steps.filter.outputs.platform }}
+      agent: ${{ steps.filter.outputs.agent }}
+      test-executor: ${{ steps.filter.outputs.test-executor }}
+      terraform: ${{ steps.filter.outputs.terraform }}
+      github-workflows: ${{ steps.filter.outputs.github-workflows }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            ui:
+              - 'ui/**'
+            platform:
+              - 'ui-v2/**'
+            agent:
+              - 'agent/**'
+            test-executor:
+              - 'test-executor/**'
+            terraform:
+              - 'terraform/**'
+            github-workflows:
+              - '.github/**'
+
+  # ============================================
+  # TERRAFORM PLAN (PR Only) - For validation
+  # ============================================
+  terraform-plan:
+    name: Terraform Plan (PR Validation)
     runs-on:
-      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram] 
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      (needs.detect-changes.outputs.terraform == 'true' || 
+       needs.detect-changes.outputs.github-workflows == 'true')
     environment: dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./terraform
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Comment PR with Terraform Plan
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const output = `#### Terraform Plan 📖
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`terraform
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+            
+            </details>
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+  # ============================================
+  # TERRAFORM APPLY (Push to develop only)
+  # ============================================
+  terraform-apply:
+    name: Terraform Apply (Deployment)
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: detect-changes
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/develop' &&
+      (needs.detect-changes.outputs.terraform == 'true' || 
+       needs.detect-changes.outputs.github-workflows == 'true')
+    environment: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
       - name: AWS Terraform Apply
         uses: cigna-group/aws-template-actions/terraform-apply@v2.0.3
         with:
@@ -68,16 +178,53 @@ jobs:
           environment: ${{ env.ENVIRONMENT }}
           aws_region: ${{ env.AWS_REGION }}
 
-  # UI
-  docker-build-push-ui:
+  # ============================================
+  # UI SERVICE - Validation (PR)
+  # ============================================
+  ui-validation:
+    name: UI - Build Validation
     runs-on:
       labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
-    needs: terraform-apply
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.ui == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image (Validation Only)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ui
+          file: ./ui/Dockerfile
+          push: false
+          tags: e2e-ai-dev-ui:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # UI SERVICE - Deployment (Push to develop)
+  # ============================================
+  ui-deployment:
+    name: UI - Build and Deploy
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: [detect-changes, terraform-apply]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/develop' &&
+      needs.detect-changes.outputs.ui == 'true'
+    # Run even if terraform-apply is skipped (when terraform hasn't changed)
     outputs:
       image_uri: ${{ steps.docker-build-push-ui.outputs.image_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Push Docker Image - UI
         id: docker-build-push-ui
         uses: ./.github/actions/docker-build-push-ecr
@@ -88,6 +235,7 @@ jobs:
           ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_UI }}
           image_tag: ${{ github.sha }}
           dockerfile_path: "./ui"
+
       - name: Deploy to ECS service
         uses: ./.github/actions/ecs-redeploy
         with:
@@ -97,16 +245,52 @@ jobs:
           ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
           ecs_service_name: ${{ env.ECS_SERVICE_NAME_UI }}
 
-  # Platform
-  docker-build-push-platform:
+  # ============================================
+  # PLATFORM SERVICE - Validation (PR)
+  # ============================================
+  platform-validation:
+    name: Platform - Build Validation
     runs-on:
       labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
-    needs: terraform-apply
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.platform == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image (Validation Only)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ui-v2
+          file: ./ui-v2/Dockerfile
+          push: false
+          tags: e2e-ai-dev-platform:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # PLATFORM SERVICE - Deployment (Push to develop)
+  # ============================================
+  platform-deployment:
+    name: Platform - Build and Deploy
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: [detect-changes, terraform-apply]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/develop' &&
+      needs.detect-changes.outputs.platform == 'true'
     outputs:
       image_uri: ${{ steps.docker-build-push-platform.outputs.image_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Push Docker Image - Platform
         id: docker-build-push-platform
         uses: ./.github/actions/docker-build-push-ecr
@@ -117,6 +301,7 @@ jobs:
           ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_PLATFORM }}
           image_tag: ${{ github.sha }}
           dockerfile_path: "./ui-v2"
+
       - name: Deploy to ECS service
         uses: ./.github/actions/ecs-redeploy
         with:
@@ -126,17 +311,52 @@ jobs:
           ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
           ecs_service_name: ${{ env.ECS_SERVICE_NAME_PLATFORM }}
 
-
-  # Agent
-  docker-build-push-agent:
+  # ============================================
+  # AGENT SERVICE - Validation (PR)
+  # ============================================
+  agent-validation:
+    name: Agent - Build Validation
     runs-on:
       labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
-    needs: terraform-apply
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.agent == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image (Validation Only)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent
+          file: ./agent/Dockerfile
+          push: false
+          tags: e2e-ai-dev-agent:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # AGENT SERVICE - Deployment (Push to develop)
+  # ============================================
+  agent-deployment:
+    name: Agent - Build and Deploy
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: [detect-changes, terraform-apply]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/develop' &&
+      needs.detect-changes.outputs.agent == 'true'
     outputs:
       image_uri: ${{ steps.docker-build-push-agent.outputs.image_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Push Docker Image - Agent
         id: docker-build-push-agent
         uses: ./.github/actions/docker-build-push-ecr
@@ -147,6 +367,7 @@ jobs:
           ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_AGENT }}
           image_tag: ${{ github.sha }}
           dockerfile_path: "./agent"
+
       - name: Deploy to ECS service
         uses: ./.github/actions/ecs-redeploy
         with:
@@ -156,16 +377,52 @@ jobs:
           ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
           ecs_service_name: ${{ env.ECS_SERVICE_NAME_AGENT }}
 
-  # Test Executor
-  docker-build-push-test-executor:
+  # ============================================
+  # TEST EXECUTOR SERVICE - Validation (PR)
+  # ============================================
+  test-executor-validation:
+    name: Test Executor - Build Validation
     runs-on:
       labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
-    needs: terraform-apply
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.test-executor == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image (Validation Only)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./test-executor
+          file: ./test-executor/Dockerfile
+          push: false
+          tags: e2e-ai-dev-test-executor:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # TEST EXECUTOR SERVICE - Deployment (Push to develop)
+  # ============================================
+  test-executor-deployment:
+    name: Test Executor - Build and Deploy
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: [detect-changes, terraform-apply]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/develop' &&
+      needs.detect-changes.outputs.test-executor == 'true'
     outputs:
       image_uri: ${{ steps.docker-build-push-test-executor.outputs.image_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Push Docker Image - Test Executor
         id: docker-build-push-test-executor
         uses: ./.github/actions/docker-build-push-ecr
@@ -176,6 +433,7 @@ jobs:
           ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_TEST_EXECUTOR }}
           image_tag: ${{ github.sha }}
           dockerfile_path: "./test-executor"
+
       - name: Deploy to ECS service
         uses: ./.github/actions/ecs-redeploy
         with:
@@ -185,6 +443,9 @@ jobs:
           ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
           ecs_service_name: ${{ env.ECS_SERVICE_NAME_TEST_EXECUTOR }}
 
+  # ============================================
+  # TERRAFORM DESTROY (Manual workflow dispatch)
+  # ============================================
   terraform-destroy:
     runs-on:
       labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
@@ -195,6 +456,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
       - name: AWS Terraform Destroy
         uses: ./.github/actions/aws-terraform-destroy
         with:
