@@ -1,0 +1,1 @@
+declare module '@prisma/migrate/dist/utils/printFiles';

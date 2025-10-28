@@ -1,0 +1,117 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// 1. ENUMS
+// =========================================================
+
+enum TestStatus {
+  DRAFT               // Test saved, but processing not started/paused.
+  IN_PROGRESS         // Step 2: Currently calling the AI Agent for Plan generation.
+  PLAN_READY          // Step 3: Test Plan (Version 1 or N) is ready for review/modification.
+  REVIEW_PENDING      // User has requested changes, waiting for 'Make Changes' button click.
+  SCRIPT_GENERATING   // Step 4: Final Plan version has been selected, waiting for Script generation.
+  SCRIPT_READY        // Final Test Script is complete and available in the Test Library.
+  FAILED              // AI Agent call failed at any stage.
+}
+
+// =========================================================
+// 2. MODELS
+// =========================================================
+
+// -----------------------------------------------------------
+// 2.1. Test Suite (For grouping, especially for bulk uploads)
+// -----------------------------------------------------------
+model TestSuite {
+  id      String @id @default(uuid())
+  name    String
+  // Relation: One TestSuite has many Tests
+  stories Test[]
+}
+
+// -----------------------------------------------------------
+// 2.2. Test (The primary workflow entity)
+// -----------------------------------------------------------
+model Test {
+  id                   String       @id @default(uuid())
+  // User Input Fields (from Step 1)
+  testId               String       @unique // The unique ID visible to the user
+  description          String       @db.Text
+  userStoryDescription String?      @db.Text // NEW: User story description from form
+  
+  // Workflow and Metadata
+  status               TestStatus
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  
+  // Relationships
+  testSuiteId          String?
+  testSuite            TestSuite?   @relation(fields: [testSuiteId], references: [id])
+  
+  // NEW: Relationship to AcceptanceCriteria
+  acceptanceCriteria   AcceptanceCriteria[] 
+  
+  // Outputs and History
+  testPlanVersions     TestPlanVersion[]
+  testScript           TestScript?
+}
+
+// -----------------------------------------------------------
+// 2.3. NEW: Acceptance Criteria (For one-to-many relationship with Test)
+// -----------------------------------------------------------
+model AcceptanceCriteria {
+  id                   String       @id @default(uuid())
+  content              String       @db.Text // The text of the specific acceptance criterion
+  createdAt            DateTime     @default(now())
+  
+  // Relationship
+  testRecordId         String
+  test                 Test    @relation(fields: [testRecordId], references: [id])
+}
+
+// -----------------------------------------------------------
+// 2.4. Test Plan Version (Versioning for Step 3: Review/Modify)
+// -----------------------------------------------------------
+model TestPlanVersion {
+  id                   String       @id @default(uuid())
+  // Version Control
+  versionNumber        Int
+  isFinalized          Boolean      @default(false)
+  
+  // Content and Changes
+  planContent          String       @db.Text
+  generatedAt          DateTime     @default(now())
+  
+  // Relationship
+  testRecordId         String
+  test                 Test    @relation(fields: [testRecordId], references: [id])
+  
+  // Ensure version numbers are unique per Test
+  @@unique([testRecordId, versionNumber])
+}
+
+// -----------------------------------------------------------
+// 2.5. Test Script (The final output from Step 4)
+// -----------------------------------------------------------
+model TestScript {
+  id                   String       @id @default(uuid())
+  scriptContent        String       @db.Text
+  generatedAt          DateTime     @default(now())
+  
+  // Relationship
+  testRecordId         String       @unique
+  test                 Test    @relation(fields: [testRecordId], references: [id])
+}

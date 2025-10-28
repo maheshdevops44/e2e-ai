@@ -1,0 +1,204 @@
+name: Dev Deploy
+run-name: ${{ github.event.head_commit.message }}
+
+on:
+  push:
+    branches:
+      - "develop"
+    paths:
+      - "terraform/**"
+      - ".github/**"
+      - "ui/**"
+      - "agent/**"
+      - "test-executor/**"
+  pull_request:
+    branches-ignore:
+      - "release"
+      - "main"
+    paths:
+      - "terraform/**"
+      - "ui/**"
+      - "agent/**"
+      - "test-executor/**"
+      - "ui-v2/**"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'destroy'
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  
+
+env:
+  ECR_REPOSITORY_NAME_UI: "e2e-ai-dev-ui"
+  ECR_REPOSITORY_NAME_AGENT: "e2e-ai-dev-agent"
+  ECR_REPOSITORY_NAME_TEST_EXECUTOR: "e2e-ai-dev-test-executor"
+  AWS_REGION: "us-east-1" 
+  ENVIRONMENT: "dev"
+  ECS_CLUSTER_NAME: "e2e-ai-dev-cluster"
+  ECS_SERVICE_NAME_UI: "e2e-ai-dev-ui-service"
+  ECS_SERVICE_NAME_PLATFORM: "e2e-ai-dev-platform-service"
+  ECR_REPOSITORY_NAME_PLATFORM: "e2e-ai-dev-platform"
+  ECS_SERVICE_NAME_AGENT: "e2e-ai-dev-agent-service"
+  ECS_SERVICE_NAME_TEST_EXECUTOR: "e2e-ai-dev-test-executor-service"
+  ECS_TASK_DEFINITION_FAMILY_UI: "e2e-ai-dev-ui-task"
+  ECS_TASK_DEFINITION_FAMILY_PLATFORM: "e2e-ai-dev-platform-task"
+  ECS_TASK_DEFINITION_FAMILY_AGENT: "e2e-ai-dev-agent-task"
+  ECS_TASK_DEFINITION_FAMILY_TEST_EXECUTOR: "e2e-ai-dev-test-executor-task"
+  IAM_DEPLOYER_ROLE_NAME: "E2eAiDeployer"
+
+jobs:
+  terraform-apply:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram] 
+    environment: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: AWS Terraform Apply
+        uses: cigna-group/aws-template-actions/terraform-apply@v2.0.3
+        with:
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          environment: ${{ env.ENVIRONMENT }}
+          aws_region: ${{ env.AWS_REGION }}
+
+  # UI
+  docker-build-push-ui:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: terraform-apply
+    outputs:
+      image_uri: ${{ steps.docker-build-push-ui.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Push Docker Image - UI
+        id: docker-build-push-ui
+        uses: ./.github/actions/docker-build-push-ecr
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_UI }}
+          image_tag: ${{ github.sha }}
+          dockerfile_path: "./ui"
+      - name: Deploy to ECS service
+        uses: ./.github/actions/ecs-redeploy
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
+          ecs_service_name: ${{ env.ECS_SERVICE_NAME_UI }}
+
+  # Platform
+  docker-build-push-platform:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: terraform-apply
+    outputs:
+      image_uri: ${{ steps.docker-build-push-platform.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Push Docker Image - Platform
+        id: docker-build-push-platform
+        uses: ./.github/actions/docker-build-push-ecr
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_PLATFORM }}
+          image_tag: ${{ github.sha }}
+          dockerfile_path: "./ui-v2"
+      - name: Deploy to ECS service
+        uses: ./.github/actions/ecs-redeploy
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
+          ecs_service_name: ${{ env.ECS_SERVICE_NAME_PLATFORM }}
+
+
+  # Agent
+  docker-build-push-agent:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: terraform-apply
+    outputs:
+      image_uri: ${{ steps.docker-build-push-agent.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Push Docker Image - Agent
+        id: docker-build-push-agent
+        uses: ./.github/actions/docker-build-push-ecr
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_AGENT }}
+          image_tag: ${{ github.sha }}
+          dockerfile_path: "./agent"
+      - name: Deploy to ECS service
+        uses: ./.github/actions/ecs-redeploy
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
+          ecs_service_name: ${{ env.ECS_SERVICE_NAME_AGENT }}
+
+  # Test Executor
+  docker-build-push-test-executor:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: terraform-apply
+    outputs:
+      image_uri: ${{ steps.docker-build-push-test-executor.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Push Docker Image - Test Executor
+        id: docker-build-push-test-executor
+        uses: ./.github/actions/docker-build-push-ecr
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME_TEST_EXECUTOR }}
+          image_tag: ${{ github.sha }}
+          dockerfile_path: "./test-executor"
+      - name: Deploy to ECS service
+        uses: ./.github/actions/ecs-redeploy
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          ecs_cluster_name: ${{ env.ECS_CLUSTER_NAME }}
+          ecs_service_name: ${{ env.ECS_SERVICE_NAME_TEST_EXECUTOR }}
+
+  terraform-destroy:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    environment:
+      name: manual-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: AWS Terraform Destroy
+        uses: ./.github/actions/aws-terraform-destroy
+        with:
+          iam_deployer_role_name: ${{ env.IAM_DEPLOYER_ROLE_NAME }}
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          environment: ${{ env.ENVIRONMENT }}
+          aws_region: ${{ env.AWS_REGION }}

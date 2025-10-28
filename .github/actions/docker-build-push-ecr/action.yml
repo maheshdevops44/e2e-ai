@@ -1,0 +1,64 @@
+name: 'Docker Build and Push to ECR'
+description: 'Build Docker image and push to ECR repository'
+
+inputs:
+  aws_account_id:
+    description: 'AWS Account ID'
+    required: true
+  aws_region:
+    description: 'AWS Region'
+    required: true
+    default: 'us-east-1'
+  iam_deployer_role_name:
+    description: 'IAM role name for deployment'
+    required: true
+  ecr_repository_name:
+    description: 'ECR repository name'
+    required: true
+  dockerfile_path:
+    description: 'Path to Dockerfile'
+    required: true
+    default: './api'
+  image_tag:
+    description: 'Docker image tag'
+    required: true
+
+outputs:
+  image_uri:
+    description: 'Full ECR image URI with tag'
+    value: ${{ steps.build.outputs.image_uri }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.aws_account_id }}:role/Enterprise/${{ inputs.iam_deployer_role_name }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and push Docker image
+      id: build
+      shell: bash
+      run: |
+        ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY=${{ inputs.ecr_repository_name }}
+        IMAGE_TAG=${{ inputs.image_tag }}
+        IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        
+        # Build image
+        docker build --platform linux/amd64 -t $IMAGE_URI ${{ inputs.dockerfile_path }}
+        
+        # Push image
+        docker push $IMAGE_URI
+        
+        # Also tag and push as latest
+        docker tag $IMAGE_URI $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "Built and pushed: $IMAGE_URI" 
