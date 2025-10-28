@@ -1,0 +1,45 @@
+name: 'AWS Terraform Destroy'
+description: 'Runs Terraform destroy to tear down AWS infrastructure. Requires use of the aws-template repository.'
+inputs:
+  terraform_version:
+    description: 'Terraform version'
+    required: false
+    default: '1.11.3'
+  aws_region:
+    description: 'AWS region'
+    required: false
+    default: 'us-east-1'
+  iam_deployer_role_name:
+    description: 'IAM deployer role name'
+    required: true
+  aws_account_id:
+    description: 'AWS account ID'
+    required: true
+  environment:
+    description: 'Environment'
+    required: true
+  destroy_options:
+    description: Additional Terraform destroy command options.  See https://developer.hashicorp.com/terraform/cli/commands/destroy#destroy-options
+    required: false
+    default: ''
+  working_directory:
+    description: Working directory of your terraform code
+    required: false
+    default: 'terraform/base'
+runs:
+  using: "composite"
+  steps:
+    - name: Terraform init
+      uses: cigna-group/aws-template-actions/terraform-init@v2.0.3
+      with:
+        environment: ${{ inputs.environment }}
+        terraform_version: ${{ inputs.terraform_version }}
+        aws_region: ${{ inputs.aws_region }}
+        iam_deployer_role_name: ${{ inputs.iam_deployer_role_name }}
+        aws_account_id: ${{ inputs.aws_account_id }}
+        working_directory: ${{ inputs.working_directory }}
+
+    - name: Terraform destroy base module
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: terraform destroy ${{ inputs.destroy_options }} -auto-approve -var-file=environments/${{ inputs.environment }}.tfvars 

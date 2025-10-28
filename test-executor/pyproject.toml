@@ -1,0 +1,39 @@
+[tool.pytest.ini_options]
+addopts = [
+  "--clean-alluredir",
+  "--alluredir=allure-results",
+  "--allure-link-pattern",
+  "issue:https://{}",
+  "--allure-link-pattern",
+  "link:https://{}",
+  "--allure-link-pattern",
+  "tms:https://{}",
+  "-ra",
+  "--color=yes",
+  "--video=retain-on-failure",
+  "--tracing=retain-on-failure"
+]
+
+log_cli = true
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_cli_level = "INFO"
+markers = [
+  "devRun: marks tests that run before merge to the main branch"
+]
+pythonpath = ["src", "tests"]
+
+[tool.ruff]
+exclude = [".venv", "env", "playwright", "allure-results", "allure-report"]
+ignore = [
+  "D203",  # One blank line required before class docstring (conflicts with D211)
+  "D213",  # Multi-line docstring summary should start at the second line
+  "COM812"
+]
+line-length = 100
+select = ["ALL"]
+target-version = "py311"
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"

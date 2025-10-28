@@ -1,0 +1,94 @@
+name: Test Deploy
+run-name: ${{ github.event.head_commit.message }}
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "terraform/**"
+      - "api/**"
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "terraform/**"
+      - "api/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ECR_REPOSITORY_NAME: "e2e-ai-test-app" # TODO: Replace with actual ECR repo name pattern
+  AWS_REGION: "us-east-1" 
+  ENVIRONMENT: "test"
+  ECS_CLUSTER_NAME: "e2e-ai-test-cluster"
+  ECS_SERVICE_NAME: "e2e-ai-test-service"
+  ECS_TASK_DEFINITION_FAMILY: "e2e-ai-test-task"
+
+jobs:
+  terraform-apply:
+    permissions:
+      contents: read
+      issues: write
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram] 
+    environment: manual-approval
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: AWS Terraform Apply
+        uses: ./.github/actions/aws-terraform-apply
+        with:
+          iam_deployer_role_name: ${{ secrets.IAM_DEPLOYER_ROLE_NAME }}
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          environment: ${{ env.ENVIRONMENT }}
+
+  docker-build-push:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: terraform-apply
+    outputs:
+      image_uri: ${{ steps.docker-build.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Docker Image
+        id: docker-build
+        uses: ./.github/actions/docker-build-ecr
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ secrets.IAM_DEPLOYER_ROLE_NAME }}
+          ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME }}
+          dockerfile_path: "./api"
+          image_tag: ${{ github.sha }}
+      - name: Push Docker Image
+        uses: ./.github/actions/docker-push-ecr
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ secrets.IAM_DEPLOYER_ROLE_NAME }}
+          ecr_repository_name: ${{ env.ECR_REPOSITORY_NAME }}
+          image_tag: ${{ github.sha }}
+
+  ecs-deploy:
+    runs-on:
+      labels: [GitHub-Hosted-Linux-x64-latest-2-core-8gb-ram]
+    needs: docker-build-push
+    environment: manual-approval
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Deploy to ECS
+        uses: ./.github/actions/ecs-deploy
+        with:
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          iam_deployer_role_name: ${{ secrets.IAM_DEPLOYER_ROLE_NAME }}
+          cluster_name: ${{ env.ECS_CLUSTER_NAME }}
+          service_name: ${{ env.ECS_SERVICE_NAME }}
+          task_definition_family: ${{ env.ECS_TASK_DEFINITION_FAMILY }}
+          image_uri: ${{ needs.docker-build-push.outputs.image_uri }}
+          container_name: "app"

@@ -1,0 +1,44 @@
+name: 'ECS Redeploy'
+description: 'Force ECS service to redeploy with latest image'
+
+inputs:
+  aws_account_id:
+    description: 'AWS Account ID'
+    required: true
+  aws_region:
+    description: 'AWS Region'
+    required: true
+    default: 'us-east-1'
+  iam_deployer_role_name:
+    description: 'IAM role name for deployment'
+    required: true
+  ecs_cluster_name:
+    description: 'ECS cluster name'
+    required: true
+  ecs_service_name:
+    description: 'ECS service name'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.aws_account_id }}:role/Enterprise/${{ inputs.iam_deployer_role_name }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Force ECS service redeploy
+      shell: bash
+      run: |
+        aws ecs update-service \
+          --cluster ${{ inputs.ecs_cluster_name }} \
+          --service ${{ inputs.ecs_service_name }} \
+          --force-new-deployment
+
+    - name: Wait for deployment to complete
+      shell: bash
+      run: |
+        aws ecs wait services-stable \
+          --cluster ${{ inputs.ecs_cluster_name }} \
+          --services ${{ inputs.ecs_service_name }} 

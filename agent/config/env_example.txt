@@ -1,0 +1,17 @@
+# Environment Variables for Playwright Automation Script
+# Copy this file to .env and update with your actual values
+
+# User Credentials
+LAN_ID=your_actual_username
+LAN_PASSWORD=your_actual_password
+
+# Test Data
+PATIENT_ID=16888824
+COMMON_INTAKE_ID=your_actual_intake_id
+
+# Application URLs (optional - defaults are used if not set)
+TDM_TOOL_URL=https://tdm-tool-qa.express-scripts.com/
+INTAKE_URL=https://spcia-qa.express-scripts.com/spcia
+CLEARANCE_URL=https://clearance-qa.express-scripts.com/spclr
+RXP_URL=https://sprxp-qa.express-scripts.com/sprxp/
+CRM_URL=https://spcrmqa-internal.express-scripts.com/spcrm88/ 

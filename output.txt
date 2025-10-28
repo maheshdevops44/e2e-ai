@@ -1,0 +1,153 @@
+from agent_utils import find_element_across_frames
+from time import sleep
+def step(page):
+    page.goto("https://clearance-qa.express-scripts.com/spclr/app/default/")
+    sleep(2)
+
+    # Login
+    username = find_element_across_frames(page, 'input[name="UserIdentifier"]')
+    if not username:
+        raise Exception("Username input not found")
+    username.fill("C9G5JS")
+    sleep(1)
+
+    password = find_element_across_frames(page, 'input[name="Password"]')
+    if not password:
+        raise Exception("Password input not found")
+    password.fill("Emphatic-Award1-Tinker")
+    sleep(1)
+
+    login_btn = find_element_across_frames(page, 'button#sub')
+    if not login_btn:
+        raise Exception("Login button not found")
+    login_btn.click()
+    sleep(4)
+
+    # Click Search Cases
+    search_cases = find_element_across_frames(page, 'a:has-text("Search Cases")')
+    if not search_cases:
+        raise Exception("Search Cases link not found")
+    search_cases.click()
+    sleep(3)
+
+    # Enter Patient ID and search
+    patient_id = find_element_across_frames(page, 'input[name="$PpyDisplayHarness$pCaseSearchCriteria$pPatient$pPatientIDNumeric"]')
+    if not patient_id:
+        raise Exception("Patient ID input not found")
+    patient_id.fill("16888913")
+    sleep(1)
+
+    search_btn = find_element_across_frames(page, 'button[name="SearchCases_pyDisplayHarness.CaseSearchCriteria_14"]')
+    if not search_btn:
+        raise Exception("Search button not found")
+    search_btn.click()
+    sleep(4)
+
+    # Click on IE Link under ID
+    ie_link = find_element_across_frames(page, '//table[@pl_prop=\'D_GetWorkCases.pxResults\']/tbody/tr[2]/td[1]//a')
+    if not ie_link:
+        raise Exception("IE Link under ID not found")
+    ie_link.click()
+    sleep(5)
+
+    # Eligibility Tab > ESI: Enter Place of Service ID (exact selector not provided)
+    pos_id_input = find_element_across_frames(page, 'input[name="PlaceOfServiceID"]')
+    if not pos_id_input:
+        raise Exception("Place of Service ID input not found")
+    pos_id_input.fill("01")
+    sleep(1)
+
+    # Payer Information: BIN
+    bin_input = find_element_across_frames(page, 'input[name="BIN"]')
+    if not bin_input:
+        raise Exception("BIN input not found")
+    bin_input.fill("610014")
+    sleep(1)
+
+    # PCN
+    pcn_input = find_element_across_frames(page, 'input[name="PCN"]')
+    if not pcn_input:
+        raise Exception("PCN input not found")
+    pcn_input.fill("D0TEST")
+    sleep(1)
+
+    # Group Number
+    group_number_input = find_element_across_frames(page, 'input[name="GroupNumber"]')
+    if not group_number_input:
+        raise Exception("Group Number input not found")
+    group_number_input.fill("Verizon")
+    sleep(1)
+
+    # Adjudication Group
+    adj_group_input = find_element_across_frames(page, 'input[name="AdjudicationGroup"]')
+    if not adj_group_input:
+        raise Exception("Adjudication Group input not found")
+    adj_group_input.fill("PBM")
+    sleep(1)
+
+    # Save Payer Info
+    payer_save_btn = find_element_across_frames(page, 'button:has-text("Save")')
+    if not payer_save_btn:
+        raise Exception("Payer Information Save button not found")
+    payer_save_btn.click()
+    sleep(3)
+
+    # POLICY INFORMATION
+    cardholder_id_input = find_element_across_frames(page, 'input[name="CardHolderID"]')
+    if not cardholder_id_input:
+        raise Exception("CardHolder ID input not found")
+    cardholder_id_input.fill("555123123")
+    sleep(1)
+
+    personcode_input = find_element_across_frames(page, 'input[name="PersonCode"]')
+    if not personcode_input:
+        raise Exception("PersonCode input not found")
+    personcode_input.fill("1")
+    sleep(1)
+
+    ins_effective_date_input = find_element_across_frames(page, 'input[name="InsuranceEffectiveDate"]')
+    if not ins_effective_date_input:
+        raise Exception("Insurance Effective Date input not found")
+    ins_effective_date_input.fill("2024-04-01")
+    sleep(1)
+
+    # Save Policy Information
+    policy_save_btn = find_element_across_frames(page, 'button:has-text("Save")')
+    if not policy_save_btn:
+        raise Exception("Policy Information Save button not found")
+    policy_save_btn.click()
+    sleep(3)
+
+    # Click Next
+    next_btn_1 = find_element_across_frames(page, 'button:has-text("Next")')
+    if not next_btn_1:
+        raise Exception("Next button not found after saving policy information")
+    next_btn_1.click()
+    sleep(3)
+
+    # Verify Insurance Data Saved Successfully (assume confirmation message)
+    insurance_saved_msg = find_element_across_frames(page, 'text=Insurance Data Saved Successfully')
+    if not insurance_saved_msg:
+        raise Exception("Insurance Data Saved Successfully message not found")
+    sleep(1)
+
+    # Click Next
+    next_btn_2 = find_element_across_frames(page, 'button:has-text("Next")')
+    if not next_btn_2:
+        raise Exception("Next button not found before Assign Co Pay step")
+    next_btn_2.click()
+    sleep(3)
+
+    # Select Drop Down under Assign Co Pay and select P option
+    copay_dropdown = find_element_across_frames(page, 'select[name="AssignCopay"]')
+    if not copay_dropdown:
+        raise Exception("Assign Copay dropdown not found")
+    copay_dropdown.select_option(label="P")
+    sleep(1)
+
+    # Click Finish
+    finish_btn = find_element_across_frames(page, 'button:has-text("Finish")')
+    if not finish_btn:
+        raise Exception("Finish button not found")
+    finish_btn.click()
+    sleep(3)
