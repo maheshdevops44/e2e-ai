@@ -1,0 +1,33 @@
+name: Dev Environment
+run-name: Deploy to Dev - ${{ github.event.head_commit.message }}
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+    inputs:
+      skip_terraform:
+        description: 'Skip Terraform deployment'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy-to-dev:
+    name: 🚀 Deploy to Development
+    uses: ./.github/workflows/_reusable-deploy.yml
+    with:
+      environment: dev
+      aws_region: us-east-1
+      terraform_version: '1.5.0'
+      runner_labels: ubuntu-latest
+      skip_terraform: ${{ inputs.skip_terraform || false }}
+    secrets:
+      aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+      iam_deployer_role_name: ${{ secrets.IAM_DEPLOYER_ROLE_NAME }}
