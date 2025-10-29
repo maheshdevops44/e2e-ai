@@ -1,0 +1,123 @@
+name: 'Docker Build, Push and Deploy'
+description: 'Complete Docker deployment pipeline - build, push to ECR, deploy to ECS'
+
+inputs:
+  aws_account_id:
+    description: 'AWS Account ID'
+    required: true
+  aws_region:
+    description: 'AWS Region'
+    required: false
+    default: 'us-east-1'
+  iam_deployer_role_name:
+    description: 'IAM role name for deployment'
+    required: true
+  ecr_repository_name:
+    description: 'ECR repository name'
+    required: true
+  context:
+    description: 'Docker build context path'
+    required: true
+  dockerfile:
+    description: 'Path to Dockerfile relative to context'
+    required: false
+    default: 'Dockerfile'
+  image_tag:
+    description: 'Docker image tag'
+    required: true
+  build_args:
+    description: 'Build arguments (newline separated)'
+    required: false
+    default: ''
+  ecs_cluster_name:
+    description: 'ECS cluster name'
+    required: true
+  ecs_service_name:
+    description: 'ECS service name'
+    required: true
+  ecs_task_definition_family:
+    description: 'ECS task definition family'
+    required: true
+  container_name:
+    description: 'Container name in task definition'
+    required: false
+    default: 'app'
+
+outputs:
+  image_uri:
+    description: 'Full ECR image URI with tag'
+    value: ${{ steps.build.outputs.image_uri }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.aws_account_id }}:role/Enterprise/${{ inputs.iam_deployer_role_name }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+        push: true
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecr_repository_name }}:${{ inputs.image_tag }}
+          ${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecr_repository_name }}:latest
+        build-args: |
+          AWS_REGION=${{ inputs.aws_region }}
+          ${{ inputs.build_args }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+
+    - name: Set image URI output
+      id: set-output
+      shell: bash
+      run: |
+        IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecr_repository_name }}:${{ inputs.image_tag }}"
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "Built and pushed: $IMAGE_URI"
+
+    - name: Download current task definition
+      shell: bash
+      run: |
+        aws ecs describe-task-definition \
+          --task-definition ${{ inputs.ecs_task_definition_family }} \
+          --query taskDefinition \
+          --output json > task-definition.json
+
+    - name: Update task definition with new image
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json
+        container-name: ${{ inputs.container_name }}
+        image: ${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecr_repository_name }}:${{ inputs.image_tag }}
+
+    - name: Deploy to ECS service
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ inputs.ecs_service_name }}
+        cluster: ${{ inputs.ecs_cluster_name }}
+        wait-for-service-stability: true
+
+    - name: Deployment Summary
+      shell: bash
+      run: |
+        echo "## 🚀 Deployment Successful" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image:** ${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecr_repository_name }}:${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Cluster:** ${{ inputs.ecs_cluster_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Service:** ${{ inputs.ecs_service_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Region:** ${{ inputs.aws_region }}" >> $GITHUB_STEP_SUMMARY
