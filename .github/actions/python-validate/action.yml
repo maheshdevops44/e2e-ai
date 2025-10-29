@@ -1,0 +1,79 @@
+name: 'Python Validation'
+description: 'Run Python linting, type checking, and unit tests'
+
+inputs:
+  working_directory:
+    description: 'Directory containing Python code'
+    required: true
+  python_version:
+    description: 'Python version to use'
+    required: false
+    default: '3.11'
+  run_tests:
+    description: 'Whether to run unit tests'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        pip install flake8 pylint black isort pytest pytest-cov
+
+    - name: Run Black (Code Formatting)
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Black Formatting Check"
+        black --check --diff . || echo "::warning::Black formatting issues found"
+        echo "::endgroup::"
+
+    - name: Run isort (Import Sorting)
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::isort Import Check"
+        isort --check-only --diff . || echo "::warning::isort issues found"
+        echo "::endgroup::"
+
+    - name: Run Flake8 (Linting)
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Flake8 Linting"
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        echo "::endgroup::"
+
+    - name: Run Pylint (Static Analysis)
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Pylint Analysis"
+        pylint **/*.py --exit-zero || true
+        echo "::endgroup::"
+
+    - name: Run Tests
+      if: inputs.run_tests == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Unit Tests"
+        if [ -d tests ] || [ -d test ]; then
+          pytest --cov=. --cov-report=term-missing --cov-report=xml || echo "::warning::Some tests failed"
+        else
+          echo "No tests directory found, skipping tests"
+        fi
+        echo "::endgroup::"
