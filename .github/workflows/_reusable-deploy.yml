@@ -1,0 +1,293 @@
+name: Reusable Deployment Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to deploy to (dev, test, prod)'
+        required: true
+        type: string
+      aws_region:
+        description: 'AWS region'
+        required: false
+        type: string
+        default: 'us-east-1'
+      terraform_version:
+        description: 'Terraform version'
+        required: false
+        type: string
+        default: '1.5.0'
+      runner_labels:
+        description: 'Runner labels'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      skip_terraform:
+        description: 'Skip terraform deployment'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      aws_account_id:
+        required: true
+      iam_deployer_role_name:
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ============================================
+  # DETECT CHANGES
+  # ============================================
+  detect-changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.filter.outputs.terraform }}
+      ui: ${{ steps.filter.outputs.ui }}
+      platform: ${{ steps.filter.outputs.platform }}
+      agent: ${{ steps.filter.outputs.agent }}
+      test-executor: ${{ steps.filter.outputs.test-executor }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            terraform:
+              - 'terraform/**'
+            ui:
+              - 'ui/**'
+            platform:
+              - 'ui-v2/**'
+            agent:
+              - 'agent/**'
+            test-executor:
+              - 'test-executor/**'
+
+  # ============================================
+  # TERRAFORM DEPLOYMENT
+  # ============================================
+  terraform-deploy:
+    name: 🏗️ Terraform Deploy
+    runs-on: ${{ inputs.runner_labels }}
+    needs: detect-changes
+    if: |
+      !inputs.skip_terraform &&
+      needs.detect-changes.outputs.terraform == 'true'
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.aws_account_id }}:role/Enterprise/${{ secrets.iam_deployer_role_name }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var-file=environments/${{ inputs.environment }}.tfvars \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ./terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Deployment Summary
+        run: |
+          echo "## 🏗️ Terraform Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region:** ${{ inputs.aws_region }}" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================
+  # UI SERVICE DEPLOYMENT
+  # ============================================
+  ui-deploy:
+    name: 🎨 UI Service Deploy
+    runs-on: ${{ inputs.runner_labels }}
+    needs: [detect-changes, terraform-deploy]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.ui == 'true' &&
+      (needs.terraform-deploy.result == 'success' || needs.terraform-deploy.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy UI Service
+        uses: ./.github/actions/docker-deploy
+        with:
+          aws_account_id: ${{ secrets.aws_account_id }}
+          aws_region: ${{ inputs.aws_region }}
+          iam_deployer_role_name: ${{ secrets.iam_deployer_role_name }}
+          ecr_repository_name: e2e-ai-${{ inputs.environment }}-ui
+          context: './ui'
+          dockerfile: 'Dockerfile'
+          image_tag: ${{ github.sha }}
+          ecs_cluster_name: e2e-ai-${{ inputs.environment }}-cluster
+          ecs_service_name: e2e-ai-${{ inputs.environment }}-ui-service
+          ecs_task_definition_family: e2e-ai-${{ inputs.environment }}-ui-task
+          container_name: 'app'
+
+  # ============================================
+  # PLATFORM SERVICE DEPLOYMENT
+  # ============================================
+  platform-deploy:
+    name: 🚀 Platform Service Deploy
+    runs-on: ${{ inputs.runner_labels }}
+    needs: [detect-changes, terraform-deploy]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.platform == 'true' &&
+      (needs.terraform-deploy.result == 'success' || needs.terraform-deploy.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy Platform Service
+        uses: ./.github/actions/docker-deploy
+        with:
+          aws_account_id: ${{ secrets.aws_account_id }}
+          aws_region: ${{ inputs.aws_region }}
+          iam_deployer_role_name: ${{ secrets.iam_deployer_role_name }}
+          ecr_repository_name: e2e-ai-${{ inputs.environment }}-platform
+          context: './ui-v2'
+          dockerfile: 'Dockerfile'
+          image_tag: ${{ github.sha }}
+          ecs_cluster_name: e2e-ai-${{ inputs.environment }}-cluster
+          ecs_service_name: e2e-ai-${{ inputs.environment }}-platform-service
+          ecs_task_definition_family: e2e-ai-${{ inputs.environment }}-platform-task
+          container_name: 'app'
+
+  # ============================================
+  # AGENT SERVICE DEPLOYMENT
+  # ============================================
+  agent-deploy:
+    name: 🤖 Agent Service Deploy
+    runs-on: ${{ inputs.runner_labels }}
+    needs: [detect-changes, terraform-deploy]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.agent == 'true' &&
+      (needs.terraform-deploy.result == 'success' || needs.terraform-deploy.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy Agent Service
+        uses: ./.github/actions/docker-deploy
+        with:
+          aws_account_id: ${{ secrets.aws_account_id }}
+          aws_region: ${{ inputs.aws_region }}
+          iam_deployer_role_name: ${{ secrets.iam_deployer_role_name }}
+          ecr_repository_name: e2e-ai-${{ inputs.environment }}-agent
+          context: './agent'
+          dockerfile: 'Dockerfile'
+          image_tag: ${{ github.sha }}
+          ecs_cluster_name: e2e-ai-${{ inputs.environment }}-cluster
+          ecs_service_name: e2e-ai-${{ inputs.environment }}-agent-service
+          ecs_task_definition_family: e2e-ai-${{ inputs.environment }}-agent-task
+          container_name: 'app'
+
+  # ============================================
+  # TEST EXECUTOR SERVICE DEPLOYMENT
+  # ============================================
+  test-executor-deploy:
+    name: 🧪 Test Executor Service Deploy
+    runs-on: ${{ inputs.runner_labels }}
+    needs: [detect-changes, terraform-deploy]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.test-executor == 'true' &&
+      (needs.terraform-deploy.result == 'success' || needs.terraform-deploy.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy Test Executor Service
+        uses: ./.github/actions/docker-deploy
+        with:
+          aws_account_id: ${{ secrets.aws_account_id }}
+          aws_region: ${{ inputs.aws_region }}
+          iam_deployer_role_name: ${{ secrets.iam_deployer_role_name }}
+          ecr_repository_name: e2e-ai-${{ inputs.environment }}-test-executor
+          context: './test-executor'
+          dockerfile: 'Dockerfile'
+          image_tag: ${{ github.sha }}
+          ecs_cluster_name: e2e-ai-${{ inputs.environment }}-cluster
+          ecs_service_name: e2e-ai-${{ inputs.environment }}-test-executor-service
+          ecs_task_definition_family: e2e-ai-${{ inputs.environment }}-test-executor-task
+          container_name: 'app'
+
+  # ============================================
+  # DEPLOYMENT SUMMARY
+  # ============================================
+  deployment-summary:
+    name: 📊 Deployment Summary
+    runs-on: ubuntu-latest
+    needs:
+      - detect-changes
+      - terraform-deploy
+      - ui-deploy
+      - platform-deploy
+      - agent-deploy
+      - test-executor-deploy
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## 🎉 Deployment Summary - ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          get_status_emoji() {
+            case $1 in
+              success) echo "✅" ;;
+              failure) echo "❌" ;;
+              skipped) echo "⏭️" ;;
+              *) echo "⚠️" ;;
+            esac
+          }
+          
+          echo "| Terraform | $(get_status_emoji ${{ needs.terraform-deploy.result }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| UI Service | $(get_status_emoji ${{ needs.ui-deploy.result }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform Service | $(get_status_emoji ${{ needs.platform-deploy.result }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Agent Service | $(get_status_emoji ${{ needs.agent-deploy.result }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Executor | $(get_status_emoji ${{ needs.test-executor-deploy.result }}) |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for failures
+        run: |
+          if [[ "${{ needs.terraform-deploy.result }}" == "failure" ]] || \
+             [[ "${{ needs.ui-deploy.result }}" == "failure" ]] || \
+             [[ "${{ needs.platform-deploy.result }}" == "failure" ]] || \
+             [[ "${{ needs.agent-deploy.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-executor-deploy.result }}" == "failure" ]]; then
+            echo "❌ One or more deployments failed"
+            exit 1
+          else
+            echo "✅ All deployments completed successfully!"
+          fi
