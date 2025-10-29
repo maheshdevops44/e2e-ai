@@ -1,0 +1,370 @@
+name: PR Validation
+run-name: PR #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+      - release
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  # ============================================
+  # DETECT CHANGES - Determine what to validate
+  # ============================================
+  detect-changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.filter.outputs.terraform }}
+      ui: ${{ steps.filter.outputs.ui }}
+      platform: ${{ steps.filter.outputs.platform }}
+      agent: ${{ steps.filter.outputs.agent }}
+      test-executor: ${{ steps.filter.outputs.test-executor }}
+      any-service: ${{ steps.check.outputs.any-service }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            terraform:
+              - 'terraform/**'
+            ui:
+              - 'ui/**'
+            platform:
+              - 'ui-v2/**'
+            agent:
+              - 'agent/**'
+            test-executor:
+              - 'test-executor/**'
+
+      - name: Check if any service changed
+        id: check
+        run: |
+          if [[ "${{ steps.filter.outputs.ui }}" == "true" ]] || \
+             [[ "${{ steps.filter.outputs.platform }}" == "true" ]] || \
+             [[ "${{ steps.filter.outputs.agent }}" == "true" ]] || \
+             [[ "${{ steps.filter.outputs.test-executor }}" == "true" ]]; then
+            echo "any-service=true" >> $GITHUB_OUTPUT
+          else
+            echo "any-service=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================
+  # TERRAFORM VALIDATION
+  # ============================================
+  terraform-validation:
+    name: ✅ Terraform Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.terraform == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Terraform
+        uses: ./.github/actions/terraform-validate
+        with:
+          working_directory: './terraform'
+          terraform_version: '1.5.0'
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${status} **Terraform Validation ${status === '✅' ? 'Passed' : 'Failed'}**`
+            });
+
+  # ============================================
+  # PYTHON VALIDATION - UI Service
+  # ============================================
+  ui-python-validation:
+    name: 🐍 UI - Python Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.ui == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Python Code
+        uses: ./.github/actions/python-validate
+        with:
+          working_directory: './ui'
+          python_version: '3.11'
+          run_tests: 'true'
+
+  # ============================================
+  # DOCKER VALIDATION - UI Service
+  # ============================================
+  ui-docker-validation:
+    name: 🐳 UI - Docker Build
+    runs-on: ubuntu-latest
+    needs: [detect-changes, ui-python-validation]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.ui == 'true' &&
+      (needs.ui-python-validation.result == 'success' || needs.ui-python-validation.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Build
+        uses: ./.github/actions/docker-validate
+        with:
+          context: './ui'
+          dockerfile: 'Dockerfile'
+          image_name: 'e2e-ai-ui'
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${status} **UI Docker Build ${status === '✅' ? 'Passed' : 'Failed'}**`
+            });
+
+  # ============================================
+  # PYTHON VALIDATION - Platform Service
+  # ============================================
+  platform-python-validation:
+    name: 🐍 Platform - Python Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.platform == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Python Code
+        uses: ./.github/actions/python-validate
+        with:
+          working_directory: './ui-v2'
+          python_version: '3.11'
+          run_tests: 'true'
+
+  # ============================================
+  # DOCKER VALIDATION - Platform Service
+  # ============================================
+  platform-docker-validation:
+    name: 🐳 Platform - Docker Build
+    runs-on: ubuntu-latest
+    needs: [detect-changes, platform-python-validation]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.platform == 'true' &&
+      (needs.platform-python-validation.result == 'success' || needs.platform-python-validation.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Build
+        uses: ./.github/actions/docker-validate
+        with:
+          context: './ui-v2'
+          dockerfile: 'Dockerfile'
+          image_name: 'e2e-ai-platform'
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${status} **Platform Docker Build ${status === '✅' ? 'Passed' : 'Failed'}**`
+            });
+
+  # ============================================
+  # PYTHON VALIDATION - Agent Service
+  # ============================================
+  agent-python-validation:
+    name: 🐍 Agent - Python Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.agent == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Python Code
+        uses: ./.github/actions/python-validate
+        with:
+          working_directory: './agent'
+          python_version: '3.11'
+          run_tests: 'true'
+
+  # ============================================
+  # DOCKER VALIDATION - Agent Service
+  # ============================================
+  agent-docker-validation:
+    name: 🐳 Agent - Docker Build
+    runs-on: ubuntu-latest
+    needs: [detect-changes, agent-python-validation]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.agent == 'true' &&
+      (needs.agent-python-validation.result == 'success' || needs.agent-python-validation.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Build
+        uses: ./.github/actions/docker-validate
+        with:
+          context: './agent'
+          dockerfile: 'Dockerfile'
+          image_name: 'e2e-ai-agent'
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${status} **Agent Docker Build ${status === '✅' ? 'Passed' : 'Failed'}**`
+            });
+
+  # ============================================
+  # PYTHON VALIDATION - Test Executor Service
+  # ============================================
+  test-executor-python-validation:
+    name: 🐍 Test Executor - Python Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.test-executor == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Python Code
+        uses: ./.github/actions/python-validate
+        with:
+          working_directory: './test-executor'
+          python_version: '3.11'
+          run_tests: 'true'
+
+  # ============================================
+  # DOCKER VALIDATION - Test Executor Service
+  # ============================================
+  test-executor-docker-validation:
+    name: 🐳 Test Executor - Docker Build
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test-executor-python-validation]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.test-executor == 'true' &&
+      (needs.test-executor-python-validation.result == 'success' || needs.test-executor-python-validation.result == 'skipped')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Build
+        uses: ./.github/actions/docker-validate
+        with:
+          context: './test-executor'
+          dockerfile: 'Dockerfile'
+          image_name: 'e2e-ai-test-executor'
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${status} **Test Executor Docker Build ${status === '✅' ? 'Passed' : 'Failed'}**`
+            });
+
+  # ============================================
+  # FINAL STATUS CHECK
+  # ============================================
+  pr-validation-complete:
+    name: ✨ PR Validation Complete
+    runs-on: ubuntu-latest
+    needs:
+      - detect-changes
+      - terraform-validation
+      - ui-docker-validation
+      - platform-docker-validation
+      - agent-docker-validation
+      - test-executor-docker-validation
+    if: always()
+    steps:
+      - name: Check validation results
+        run: |
+          if [[ "${{ needs.terraform-validation.result }}" == "failure" ]] || \
+             [[ "${{ needs.ui-docker-validation.result }}" == "failure" ]] || \
+             [[ "${{ needs.platform-docker-validation.result }}" == "failure" ]] || \
+             [[ "${{ needs.agent-docker-validation.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-executor-docker-validation.result }}" == "failure" ]]; then
+            echo "❌ One or more validations failed"
+            exit 1
+          else
+            echo "✅ All validations passed!"
+          fi
+
+      - name: Final PR Comment
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const terraform = '${{ needs.terraform-validation.result }}';
+            const ui = '${{ needs.ui-docker-validation.result }}';
+            const platform = '${{ needs.platform-docker-validation.result }}';
+            const agent = '${{ needs.agent-docker-validation.result }}';
+            const testExecutor = '${{ needs.test-executor-docker-validation.result }}';
+            
+            const getEmoji = (status) => {
+              if (status === 'success') return '✅';
+              if (status === 'failure') return '❌';
+              return '⏭️';
+            };
+            
+            let body = `## 📋 PR Validation Summary\n\n`;
+            body += `| Component | Status |\n`;
+            body += `|-----------|--------|\n`;
+            
+            if (terraform !== 'skipped') body += `| Terraform | ${getEmoji(terraform)} |\n`;
+            if (ui !== 'skipped') body += `| UI Service | ${getEmoji(ui)} |\n`;
+            if (platform !== 'skipped') body += `| Platform Service | ${getEmoji(platform)} |\n`;
+            if (agent !== 'skipped') body += `| Agent Service | ${getEmoji(agent)} |\n`;
+            if (testExecutor !== 'skipped') body += `| Test Executor | ${getEmoji(testExecutor)} |\n`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
