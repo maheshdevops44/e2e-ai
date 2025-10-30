@@ -2,8 +2,8 @@
 ## Path-Based Filtering & PR/Deployment Separation
 
 **Presented To:** DevOps Architecture Team  
-**Presented By:** [Your Name]  
-**Date:** [Current Date]  
+**Presented By:** Loka Mahesh  
+**Date:** 30/10/2025 
 **Project:** E2E AI Platform  
 **Environment:** Development (AWS ECS Fargate)
 
@@ -464,7 +464,7 @@ terraform-apply:
 │  If ANY condition false → Job SKIPPED                        │
 └──────────────────────┬───────────────────────────────────────┘
                        ↓
-        ┌──────────────┴──────────────┐
+        ┌──────────────┴───────────────┐
         ↓                              ↓
 ┌────────────────┐           ┌─────────────────┐
 │  PR MODE       │           │  DEPLOY MODE    │
@@ -760,10 +760,10 @@ ECS Restarts: 2 (only changed services)
 ┌────────────────────────────────────────────────────────┐
 │             Single Linear Path                         │
 │                                                        │
-│  Push/PR → develop                                     │
-│       ↓                                                │
-│  terraform-apply (ALWAYS)                              │
-│       ↓                                                │
+│             Push/PR → develop                          │
+│                  ↓                                     │
+│             terraform-apply (ALWAYS)                   │
+│                  ↓                                     │
 │  ┌─────────────────────────────────────────────────┐   │
 │  │   ALL Jobs Run in Parallel (ALWAYS)             │   │
 │  │                                                 │   │
@@ -796,12 +796,12 @@ ECS Restarts: 2 (only changed services)
 ┌────────────────────────────────────────────────────────┐
 │           Intelligent Branching Path                   │
 │                                                        │
-│  Push/PR → develop                                     │
-│       ↓                                                │
-│  detect-changes (NEW!)                                 │
-│  • Analyzes git diff                                   │
-│  • Outputs changed components                          │
-│       ↓                                                │
+│        Push/PR → develop                               │
+│                 ↓                                      │
+│        detect-changes (NEW!)                           │
+│        • Analyzes git diff                             │
+│        • Outputs changed components                    │
+│                 ↓                                      │
 │  ┌──────────────┴───────────────┐                      │
 │  ↓                              ↓                      │
 │  PR MODE                  DEPLOY MODE                  │
@@ -1807,7 +1807,7 @@ ui/package.json → Matches 'ui/**' → Triggers UI jobs
 
 **End of Presentation**
 
-**Prepared by:** [Your Name]  
-**Date:** [Current Date]  
+**Prepared by:** Loka Mahesh  
+**Date:** 30/10/2025  
 **Status:** Ready for Architect Review  
 **Next Action:** Schedule review meeting
