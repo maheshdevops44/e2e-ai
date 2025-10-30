@@ -3,7 +3,7 @@
 
 **Presented To:** DevOps Architecture Team  
 **Presented By:** Loka Mahesh  
-**Date:** 30/10/2025 
+**Date:** 30/10/2025  
 **Project:** E2E AI Platform  
 **Environment:** Development (AWS ECS Fargate)
 
